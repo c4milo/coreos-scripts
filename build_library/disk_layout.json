@@ -1,9 +1,9 @@
 {
   "_comment": "See http://www.chromium.org/chromium-os/building-chromium-os/disk-layout-format",
   "metadata":{
-    "_comment": "Partitions are aligned to 1MB (2048 blocks), disks sizes should align to *both* 1MB and a CHS cylender boundry for the common 16H 63S geometry (16*63 = 1008 blocks). The least common multiple of 2048 and 1008 is 129024 blocks.",
-    "part_alignment": 2048,
-    "disk_alignment": 129024,
+    "_comment": "Partitions are aligned to 2MB (4096 blocks). For the sake of VHD disks sizes should align to *both* 2MB and a CHS cylender boundry for the common 16H 63S geometry (16*63 = 1008 blocks). The least common multiple of 4096 and 1008 is 258048 blocks.",
+    "part_alignment": 4096,
+    "disk_alignment": 258048,
     "block_size": 512,
     "fs_block_size": 4096
   },
@@ -27,9 +27,10 @@
         "uuid":"7130c94a-213a-4e5a-8e26-6cce9662f132",
         "type":"coreos-rootfs",
         "blocks":"2097152",
-        "fs_blocks":"262144",
+        "fs_blocks":"260094",
         "fs_type":"ext2",
-        "mount":"/usr"
+        "mount":"/usr",
+        "features": ["prioritize", "verity"]
       },
       "4":{
         "label":"USR-B",
@@ -64,7 +65,7 @@
       "9":{
         "label":"ROOT",
         "type":"coreos-resize",
-        "blocks":"4302848",
+        "blocks":"4427776",
         "fs_type":"btrfs",
         "fs_subvolume":"root",
         "mount":"/"
@@ -73,13 +74,19 @@
     "vm":{
       "9":{
         "label":"ROOT",
-        "blocks":"12689408"
+        "blocks":"12943360"
+      }
+    },
+    "azure":{
+      "9":{
+        "label":"ROOT",
+        "blocks":"58875904"
       }
     },
     "vagrant":{
       "9":{
         "label":"ROOT",
-        "blocks":"33591296"
+        "blocks":"33845248"
       }
     },
     "onmetal":{
@@ -118,6 +125,40 @@
         "label":"ROOT",
         "type":"4f68bce3-e8cd-4db1-96e7-fbcaf984b709",
         "blocks":"6291456"
+      }
+    },
+    "secure_demo":{
+      "1":{
+        "label":"EFI-SYSTEM",
+        "type":"efi",
+        "blocks":"2097152",
+        "fs_type":"vfat",
+        "mount":"/",
+        "features": []
+      },
+      "2":{
+        "type":"blank"
+      },
+      "3":{
+        "type":"blank"
+      },
+      "4":{
+        "type":"blank"
+      },
+      "5":{
+        "type":"blank"
+      },
+      "6":{
+        "type":"blank"
+      },
+      "7":{
+        "type":"blank"
+      },
+      "8":{
+        "type":"blank"
+      },
+      "9":{
+        "type":"blank"
       }
     }
   }

@@ -3,16 +3,8 @@
 # Set pipefail along with -e in hopes that we catch more errors
 set -e -o pipefail
 
-REGIONS=(
-    us-east-1
-    us-west-1
-    us-west-2
-    eu-west-1
-    ap-southeast-1
-    ap-southeast-2
-    ap-northeast-1
-    sa-east-1
-)
+DIR=$(dirname $0)
+source $DIR/regions.sh
 
 USAGE="Usage: $0 -V 100.0.0
     -V VERSION  Find AMI by CoreOS version. (required)
@@ -62,7 +54,7 @@ fi
 
 search_name=$(clean_version "CoreOS-$GROUP-$VER")
 declare -A AMIS HVM_AMIS
-for r in "${REGIONS[@]}"; do
+for r in "${ALL_REGIONS[@]}"; do
     AMI=$(ec2-describe-images --region=${r} -F name="${search_name}" \
         | grep -m1 ^IMAGE | cut -f2) || true
     if [[ -z "$AMI" ]]; then
@@ -83,9 +75,10 @@ done
 upload_file() {
     local name="$1"
     local content="$2"
-    url="$GS_URL/$GROUP/boards/$BOARD/$VER/${IMAGE}_${name}.txt"
-    python -W "ignore:Not using mpz_powm_sec" \
-        `which gsutil` cp - "$url" <<<"$content"
+    url="$GS_URL/$GROUP/boards/$BOARD/$VER/${IMAGE}_${name}"
+    echo -e "$content" \
+        | python -W "ignore:Not using mpz_powm_sec" \
+        `which gsutil` cp - "$url"
     echo "OK, ${url}=${content}"
 }
 
@@ -114,10 +107,10 @@ publish_ami() {
 
     # compatibility name from before addition of hvm
     if [[ "${virt_type}" == "pv" ]]; then
-        upload_file "$r" "$r_amiid"
+        upload_file "${r}.txt" "$r_amiid"
     fi
 
-    upload_file "${virt_type}_${r}" "$r_amiid"
+    upload_file "${virt_type}_${r}.txt" "$r_amiid"
 }
 
 WAIT_PIDS=()
@@ -137,6 +130,17 @@ for r in "${!HVM_AMIS[@]}"; do
 done
 HVM_ALL="${HVM_ALL#|}"
 
+AMI_ALL="\"amis\": ["
+for r in "${ALL_REGIONS[@]}"; do
+	AMI_ALL+="\n  {"
+	AMI_ALL+="\n    \"name\": \"${r}\","
+	AMI_ALL+="\n    \"pv\":   \"${AMIS[$r]}\","
+	AMI_ALL+="\n    \"hvm\":  \"${HVM_AMIS[$r]}\""
+	AMI_ALL+="\n  },"
+done
+AMI_ALL="${AMI_ALL%,}"
+AMI_ALL+="\n]"
+
 # wait for each subshell individually to report errors
 WAIT_FAILED=0
 for wait_pid in "${WAIT_PIDS[@]}"; do
@@ -150,7 +154,8 @@ if [[ ${WAIT_FAILED} -ne 0 ]]; then
     exit ${WAIT_FAILED}
 fi
 
-upload_file "all" "${PV_ALL}"
-upload_file "pv" "${PV_ALL}"
-upload_file "hvm" "${HVM_ALL}"
+upload_file "all.txt" "${PV_ALL}"
+upload_file "pv.txt" "${PV_ALL}"
+upload_file "hvm.txt" "${HVM_ALL}"
+upload_file "all.json" "${AMI_ALL}"
 echo "Done"

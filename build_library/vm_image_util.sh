@@ -12,6 +12,7 @@ VALID_IMG_TYPES=(
     openstack
     qemu
     qemu_no_kexec
+    qemu_uefi
     rackspace
     rackspace_onmetal
     rackspace_vhd
@@ -29,6 +30,7 @@ VALID_IMG_TYPES=(
     exoscale
     azure
     hyperv
+    secure_demo
 )
 
 #list of oem package names, minus the oem- prefix
@@ -110,6 +112,11 @@ IMG_qemu_no_kexec_BOOT_KERNEL=0
 IMG_qemu_no_kexec_DISK_FORMAT=qcow2
 IMG_qemu_no_kexec_DISK_LAYOUT=vm
 IMG_qemu_no_kexec_CONF_FORMAT=qemu
+
+IMG_qemu_uefi_BOOT_KERNEL=0
+IMG_qemu_uefi_DISK_FORMAT=qcow2
+IMG_qemu_uefi_DISK_LAYOUT=vm
+IMG_qemu_uefi_CONF_FORMAT=qemu_uefi
 
 ## xen
 IMG_xen_BOOT_KERNEL=0
@@ -211,12 +218,18 @@ IMG_exoscale_OEM_PACKAGE=oem-exoscale
 ## azure
 IMG_azure_BOOT_KERNEL=0
 IMG_azure_DISK_FORMAT=vhd
+IMG_azure_DISK_LAYOUT=azure
 IMG_azure_OEM_PACKAGE=oem-azure
 
 ## hyper-v
 IMG_hyperv_BOOT_KERNEL=0
 IMG_hyperv_DISK_FORMAT=vhd
 IMG_hyperv_OEM_PACKAGE=oem-hyperv
+
+## secure boot demo
+IMG_secure_demo_PARTITIONED_IMG=0
+IMG_secure_demo_DISK_FORMAT=secure_demo
+IMG_secure_demo_CONF_FORMAT=qemu_uefi
 
 ###########################################################
 
@@ -313,6 +326,7 @@ _disk_ext() {
         cpio) echo cpio.gz;;
         vmdk_ide) echo vmdk;;
         vmdk_scsi) echo vmdk;;
+        secure_demo) echo bin;;
         *) echo "${disk_format}";;
     esac
 }
@@ -330,6 +344,8 @@ setup_disk_image() {
       "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" \
           update "${VM_TMP_IMG}"
     fi
+
+    assert_image_size "${VM_TMP_IMG}" raw
 
     info "Mounting image to $(relpath "${VM_TMP_ROOT}")"
     "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" \
@@ -431,19 +447,23 @@ _write_raw_disk() {
 }
 
 _write_qcow2_disk() {
-    qemu-img convert -f raw "$1" -O qcow2 "$2"
+    qemu-img convert -f raw "$1" -O qcow2 -o compat=0.10 "$2"
+    assert_image_size "$2" qcow2
 }
 
 _write_vhd_disk() {
     qemu-img convert -f raw "$1" -O vpc "$2"
+    assert_image_size "$2" vpc
 }
 
 _write_vmdk_ide_disk() {
     qemu-img convert -f raw "$1" -O vmdk -o adapter_type=ide "$2"
+    assert_image_size "$2" vmdk
 }
 
 _write_vmdk_scsi_disk() {
     qemu-img convert -f raw "$1" -O vmdk -o adapter_type=lsilogic "$2"
+    assert_image_size "$2" vmdk
 }
 
 _write_cpio_common() {
@@ -567,6 +587,19 @@ _write_qemu_conf() {
     sed -e "s%^VM_IMAGE=.*%VM_IMAGE='${dst_name}'%" -i "${script}"
 }
 
+_write_qemu_uefi_conf() {
+    local script="$(_dst_dir)/$(_dst_name ".sh")"
+    local ovmf_ro="$(_dst_name "_ovmf_code.fd")"
+    local ovmf_rw="$(_dst_name "_ovmf_vars.fd")"
+
+    _write_qemu_conf
+    cp "/usr/share/edk2-ovmf/OVMF_CODE.fd" "$(_dst_dir)/${ovmf_ro}"
+    cp "/usr/share/edk2-ovmf/OVMF_VARS.fd" "$(_dst_dir)/${ovmf_rw}"
+    sed -e "s%^VM_PFLASH_RO=.*%VM_PFLASH_RO='${ovmf_ro}'%" \
+        -e "s%^VM_PFLASH_RW=.*%VM_PFLASH_RW='${ovmf_rw}'%" -i "${script}"
+    VM_GENERATED_FILES+=( "$(_dst_dir)/${ovmf_ro}" "$(_dst_dir)/${ovmf_rw}" )
+}
+
 _write_pxe_conf() {
     local script="$(_dst_dir)/$(_dst_name ".sh")"
     local vmlinuz_name="$(_dst_name ".vmlinuz")"
@@ -610,6 +643,7 @@ cleanShutdown = "TRUE"
 displayName = "${VM_NAME}"
 ethernet0.addressType = "generated"
 ethernet0.present = "TRUE"
+ethernet0.virtualDev = "vmxnet3"
 floppy0.present = "FALSE"
 guestOS = "other26xlinux-64"
 memsize = "${vm_mem}"
@@ -618,13 +652,26 @@ powerType.powerOn = "hard"
 powerType.reset = "hard"
 powerType.suspend = "hard"
 scsi0.present = "TRUE"
-scsi0.virtualDev = "lsilogic"
+scsi0.virtualDev = "pvscsi"
 scsi0:0.fileName = "${dst_name}"
 scsi0:0.present = "TRUE"
 sound.present = "FALSE"
 usb.generic.autoconnect = "FALSE"
 usb.present = "TRUE"
 rtc.diffFromUTC = 0
+pciBridge0.present = "TRUE"
+pciBridge4.present = "TRUE"
+pciBridge4.virtualDev = "pcieRootPort"
+pciBridge4.functions = "8"
+pciBridge5.present = "TRUE"
+pciBridge5.virtualDev = "pcieRootPort"
+pciBridge5.functions = "8"
+pciBridge6.present = "TRUE"
+pciBridge6.virtualDev = "pcieRootPort"
+pciBridge6.functions = "8"
+pciBridge7.present = "TRUE"
+pciBridge7.virtualDev = "pcieRootPort"
+pciBridge7.functions = "8"
 EOF
     # Only upload the vmx if it won't be bundled
     if [[ -z "$(_get_vm_opt BUNDLE_FORMAT)" ]]; then
@@ -837,6 +884,54 @@ _write_box_bundle() {
 }
 EOF
     VM_GENERATED_FILES+=( "${box}" "${json}" )
+}
+
+_write_secure_demo_disk() {
+    local dst_img="$2"
+    local tmp_esp="${VM_TMP_DIR}/esp"
+
+    grub-mkstandalone \
+        --output="${VM_TMP_DIR}/grub.efi" \
+        --format=x86_64-efi \
+        --modules=verify \
+        --pubkey="${BUILD_LIBRARY_DIR}/secure_demo/CoreOS-Grub-Singing-Key.gpg" \
+        "/boot/grub/grub.cfg=${BUILD_LIBRARY_DIR}/secure_demo/grub.cfg"
+    sbsign --key "${BUILD_LIBRARY_DIR}/secure_demo/CoreOS-Boot-Signer.key" \
+        --cert "${BUILD_LIBRARY_DIR}/secure_demo/CoreOS-Boot-Signer.crt" \
+        "${VM_TMP_DIR}/grub.efi"
+
+    cp "${VM_TMP_ROOT}/usr/boot/vmlinuz" "${VM_TMP_DIR}/vmlinuz"
+    sbsign --key "${BUILD_LIBRARY_DIR}/secure_demo/CoreOS-Boot-Signer.key" \
+        --cert "${BUILD_LIBRARY_DIR}/secure_demo/CoreOS-Boot-Signer.crt" \
+        "${VM_TMP_DIR}/vmlinuz"
+    gpg --detach-sign --local-user BA076BAA \
+        --output "${VM_TMP_DIR}/vmlinuz.sig" \
+        "${VM_TMP_DIR}/vmlinuz.signed"
+
+    _write_cpio_common "ignored" "${VM_TMP_DIR}/initrd"
+    gpg --detach-sign --local-user BA076BAA "${VM_TMP_DIR}/initrd"
+
+    "${BUILD_LIBRARY_DIR}/disk_util" \
+        --disk_layout="secure_demo" format "${dst_img}"
+    "${BUILD_LIBRARY_DIR}/disk_util" \
+        --disk_layout="secure_demo" mount "${dst_img}" "${tmp_esp}"
+
+    sudo mkdir -p "${tmp_esp}/EFI/boot"
+    sudo cp "${BUILD_LIBRARY_DIR}/secure_demo/bootx64.efi" \
+            "${BUILD_LIBRARY_DIR}/secure_demo/lockdown.efi" \
+            "${tmp_esp}/EFI/boot"
+    sudo cp "${VM_TMP_DIR}/grub.efi.signed" "${tmp_esp}/EFI/boot/grub.efi"
+
+    sudo mkdir -p "${tmp_esp}/coreos"
+    sudo cp "${VM_TMP_DIR}/vmlinuz.signed" "${tmp_esp}/coreos/vmlinuz"
+    sudo cp "${VM_TMP_DIR}/initrd"{,.sig} \
+        "${VM_TMP_DIR}/vmlinuz.sig" \
+        "${tmp_esp}/coreos"
+
+    "${BUILD_LIBRARY_DIR}/disk_util" \
+        --disk_layout="secure_demo" umount "${tmp_esp}"
+
+    VM_GENERATED_FILES+=( "${dst_img}" )
 }
 
 vm_cleanup() {
